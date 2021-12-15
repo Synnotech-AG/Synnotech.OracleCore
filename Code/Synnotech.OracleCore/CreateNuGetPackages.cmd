@@ -1,0 +1,1 @@
+dotnet pack ./Synnotech.OracleCore.csproj --configuration Release /p:SignAssembly=true /p:AssemblyOriginatorKeyFile=bin/Synnotech.OracleCore.snk /p:ContinuousIntegrationBuild=true
