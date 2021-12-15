@@ -1,59 +1,74 @@
-# Synnotech.MsSqlServer
-*Provides common functionality for database access to MS SQL Server.*
+# Synnotech.OracleCore
+*Provides common functionality for database access to Oracle in .NET Core 3.1 / .NET 5 or higher.*
 
 [![Synnotech Logo](synnotech-large-logo.png)](https://www.synnotech.de/)
 
-[![License](https://img.shields.io/badge/License-MIT-green.svg?style=for-the-badge)](https://github.com/Synnotech-AG/Synnotech.MsSqlServer/blob/main/LICENSE)
-[![NuGet](https://img.shields.io/badge/NuGet-2.0.0-blue.svg?style=for-the-badge)](https://www.nuget.org/packages/Synnotech.MsSqlServer/)
+[![License](https://img.shields.io/badge/License-MIT-green.svg?style=for-the-badge)](https://github.com/Synnotech-AG/Synnotech.OracleCore/blob/main/LICENSE)
+[![NuGet](https://img.shields.io/badge/NuGet-1.0.0-blue.svg?style=for-the-badge)](https://www.nuget.org/packages/Synnotech.OracleCore/)
 
 # How to Install
 
-Synnotech.MsSqlServer is compiled against [.NET Standard 2.0 and 2.1](https://docs.microsoft.com/en-us/dotnet/standard/net-standard) and thus supports all major plattforms like .NET 5, .NET Core, .NET Framework 4.6.1 or newer, Mono, Xamarin, UWP, or Unity.
+Synnotech.OracleCore is compiled against [.NET Standard 2.1](https://docs.microsoft.com/en-us/dotnet/standard/net-standard) and thus supports all corresponding platforms, e.g. .NET 6 and .NET Core 3.1.
 
-Synnotech.MsSqlServer is available as a [NuGet package](https://www.nuget.org/packages/Synnotech.MsSqlServer/) and can be installed via:
+Synnotech.OracleCore is available as a [NuGet package](https://www.nuget.org/packages/Synnotech.OracleCore/) and can be installed via:
 
-- **Package Reference in csproj**: `<PackageReference Include="Synnotech.MsSqlServer" Version="2.0.0" />`
-- **dotnet CLI**: `dotnet add package Synnotech.MsSqlServer`
-- **Visual Studio Package Manager Console**: `Install-Package Synnotech.MsSqlServer`
+- **Package Reference in csproj**: `<PackageReference Include="Synnotech.OracleCore" Version="1.0.0" />`
+- **dotnet CLI**: `dotnet add package Synnotech.OracleCore`
+- **Visual Studio Package Manager Console**: `Install-Package Synnotech.OracleCore`
 
-# What does Synnotech.MsSqlServer offer you?
+# What does Synnotech.OracleCore offer you?
 
-## Async Sessions with ADO.NET
+## Register an OracleConnection with the DI container
 
-As of version 2.0.0, Synnotech.MsSqlServer implements the `IAsyncSession` and `IAsyncReadOnlySession` from [Synnotech.DatabaseAbstractions](https://github.com/synnotech-AG/synnotech.DatabaseAbstractions). These allow you to make direct ADO.NET requests via a `SqlConnection` and `SqlCommand` through the forementioned abstractions. All async methods have full support for cancellation tokens.
-
-Consider the following abstraction for database access:
+You can register an `OracleConnection` with the DI container by calling:
 
 ```csharp
-public interface IGetContactSession : IAsyncReadOnlySession
+services.AddOracleConnection(connectionString);
+```
+
+The connection string will normally be retrieved from an `IConfiguration` instance. You have the following additional options when calling `AddOracleConnection`:
+
+- `connectionLifetime`: by default, the connection will be registered with a transient lifetime. In your app, it might also make sense to use a scoped lifetime.
+- `registerFactoryDelegate`: a boolean value that indicates whether a `Func<OracleConnection>` will also be registered with the DI container as a singleton. You can inject this factory to any service that needs to resolve an `OracleConnection` dynamically. The default value is false. Keep in mind that your DI container might support these delegates out-of-the-box, e.g. LightInject provides a feature called [Function Factories](https://www.lightinject.net/#function-factories).
+
+## Sessions with ADO.NET
+
+Synnotech.OracleCore implements the `ReadOnlySession` and `Session` according to [Synnotech.DatabaseAbstractions](https://github.com/synnotech-AG/synnotech.DatabaseAbstractions). These allow you to make direct ADO.NET requests via a `OracleConnection` and `OracleCommand`.
+
+### Read-only sessions
+
+Consider the following abstraction which represents read-only database access to find a contact:
+
+```csharp
+public interface IGetContactSession : IDisposable
 {
-    Task<Contact?> GetContactAsync(int id);
+    Contact? GetContact(int id);
 }
 ```
 
-To implement this interface easily, you can derive from `AsyncReadOnlySession`:
+To implement this interface easily, you can derive from `ReadOnlySession`. A read-only session is a connection to a database that does not require a transaction by default (because it only loads data):
 
 ```csharp
-public sealed class SqlGetContactSession : AsyncReadOnlySession, IGetContactSession
+public sealed class OracleGetContactSession : ReadOnlySession, IGetContactSession
 {
-    public SqlGetContactSession(SqlConnection sqlConnection) : base(sqlConnection) { }
+    public OracleGetContactSession(OracleConnection connection) : base(connection) { }
 
-    public async Task<Contact?> GetContactAsync(int id)
+    public Contact? GetContact(int id)
     {
-        // The following line will create a SqlCommand and automatically
-        // attach the current transaction to it (if a transaction is present).
-        await using var command = CreateCommand(); 
+        // The following line will create an OracleCommand and automatically
+        // attaches the current transaction to it (if a transaction is present).
+        using var command = CreateCommand(); 
 
         // We encourage you to use Light.EmbeddedResources and save your SQL
         // queries as embedded SQL files to your assembly.
         command.CommandText = SqlScripts.GetScript("GetContact.sql");
-        command.Parameters.Add("@Id", SqlDbType.Int).Value = id;
+        command.Parameters.Add("pId", OracleDbType.Int32, ParameterDirection.Input).Value = id;
 
-        await using var reader = await command.ExecuteReaderAsync();
-        return await DeserializeContactAsync(reader);
+        using var reader = command.ExecuteReader();
+        return DeserializeContact(reader);
     }
 
-    private async Task<Contact?> DeserializeContactAsync(SqlDataReader reader)
+    private Contact? DeserializeContact(OracleDataReader reader)
     {
         if (!reader.HasRows)
             return null;
@@ -62,8 +77,8 @@ public sealed class SqlGetContactSession : AsyncReadOnlySession, IGetContactSess
         var nameOrdinal = reader.GetOrdinal(nameof(Contact.Name));
         var emailOrdinal = reader.GetOrdinal(nameof(Contact.Email));
 
-        if (!await reader.ReadAsync())
-            throw new SerializationException("The reader could not advance to the single row");
+        if (!reader.Read())
+            throw new SerializationException("The reader could not advance to the single row of the result");
 
         var id = reader.GetInt32(idOrdinal);
         var name = reader.GetString(nameOrdinal);
@@ -85,16 +100,16 @@ public static class Sqlcripts
 ```sql
 SELECT *
 FROM Contacts
-WHERE [Id] = @Id;
+WHERE Id = :pId;
 ```
 
-You can then add your sessions to your DI container by calling the `AddSessionFactoryFor` extension method:
+You can then add your sessions to your DI container by calling the `AddSession` extension method:
 
 ```csharp
-services.AddSessionFactoryFor<IGetContactSession, SqlGetContactSession>();
+services.AddSession<IGetContactSession, OracleGetContactSession>();
 ```
 
-Be sure that a `SqlConnection` is already registered with the DI Container. You can use the `AddSqlConnection` extension method for that.
+Be sure that an `OracleConnection` is already registered with the DI Container. You can use the `AddOracleConnection` extension method for that.
 
 To call your session, e.g. in an ASP.NET Core MVC controller, you simply instantiate the session via the factory:
 
@@ -103,169 +118,119 @@ To call your session, e.g. in an ASP.NET Core MVC controller, you simply instant
 [Route("api/contacts")]
 public sealed class GetContactController : ControllerBase
 {
-    public GetContactController(ISessionFactory<IGetContactSession> sessionFactory) =>
-        SessionFactory = sessionFactory;
+    public GetContactController(Func<IGetContactSession> createSession) =>
+        CreateSession = createSession;
 
-    private ISessionFactory<IGetContactSession> SessionFactory { get; }
+    private Func<IGetContactSession> CreateSession { get; }
 
     [HttpGet("{id}")]
-    public async Task<ActionResult<Contact>> GetContact(int id)
+    public ActionResult<Contact> GetContact(int id)
     {
-        // The following call will open the session asynchronously and start
-        // a transaction (if necessary), all in one go.
-        await using var session = await SessionFactory.OpenSessionAsync();
-
-        var contact = await session.GetContactAsync(id);
+        // The following call will open the connection to the target database 
+        var session = CreateSession();
+        var contact = session.GetContact(id);
         if (contact == null)
             return NotFound();
-        return contact();
+        return contact;
     }
 }
 ```
 
-If you want to manipulate data, then simply derive from `AsyncSession` instead. This gives you an additional `SaveChangesAsync` method that allows you to commit the internal transaction.
+## Sessions that manipulate data
 
-Please be aware: Synnotech.DatabaseAbstractions does not support nested transactions. If you need them, you must create your own abstraction for it. However, we generally recommend to not use nested transactions, but use sequential transactions (e.g. when performaing batch operations).
+If you want to manipulate data, then simply derive from `Session` instead. This gives you an additional `SaveChanges` method that allows you to commit the internal transaction. By default, all classes deriving from `Session` will start a serializable transaction (this can be adjusted via an optional constructor parameter).
 
-## Easily Open SQL Connections
+> Please be aware: Synnotech.DatabaseAbstractions does not support nested transactions. If you need them, you must create your own abstraction for it. However, we generally recommend to not use nested transactions, but use sequential transactions (e.g. when performing batch operations).
 
-You can use the `Database.OpenConnectionAsync` method to create a new `SqlConnection` instance and open it asynchronously in one go:
+Consider the following abstraction:
 
 ```csharp
-await using var connection = await Database.OpenConnectionAsync(connectionString);
-```
-
-You can supply an optional `CancellationToken` if you want to.
-
-## Easily Create or Drop Databases
-
-The `Database` class offers several methods to you to easily create or drop databases. This feature should be mostly used in automated integration tests, but can also be used e.g. at app startup to ensure that a specific database is created.
-
-The corresponding methods are
-
-- `DropAndCreateDatabaseAsync`: creates a database, or drops and recreates it when it already exists. Most useful in testing scenarios when you want to have a fresh database at the beginning of a test, but want to leave it intact for inspection after the test has finished. All existing connections to the target database will be terminated before it is dropped.
-- `TryCreateDatabaseAsync`: creates a new database if it does not exist yet.
-- `TryDropDatabaseAsync`: drops a database if it exists. All existing connections to the target database will be terminated before it is dropped.
-
-For all these methods, you will provide the connection string for the target database. All these methods will connect to the "master" database of the corresponding SQL server to execute the corresponding `CREATE DATABASE` or `DROP DATABASE` statements - so be sure that the credentials provided in the connection string have enough privileges to execute these statements. All methods support `CancellationToken`.
-
-We encourage you to combine this package with [Synnotech.Xunit](https://github.com/Synnotech-AG/Synnotech.Xunit) and [Xunit.SkippableFact](https://github.com/AArnott/Xunit.SkippableFact). A typical scenario in a test project might look like this:
-
-In testsettings.json:
-
-```jsonc
+public interface IUpdateContactSession : ISession
 {
-    "database": {
-        "areTestsEnabled": false, // tests are turned off by default
-        "connectionString": "Server=(localdb)\\MsSqlLocalDb; Database=IntegrationTests; Integrated Security=True"
-    }
+    Contact? GetContact(int id);
+
+    void UpdateContact(Contact contact);
 }
 ```
 
-In testsettings.Development.json:
-
-```jsonc
-{
-    // Devs can use this file to individually configure the tests for their dev machine.
-    // This file should be ignored by your version control system.
-    "database": {
-        "areTestsEnabled": true,
-        "connectionString": "Server=MyLocalInstance; Database=IntegrationTests; Integrated Security=True"
-    }
-}
-```
-
-Your test code:
+This abstraction can be implemented by deriving from session:
 
 ```csharp
-using Synnotech.Xunit
-using Synnotech.MsSqlServer;
-using Xunit;
-
-namespace MyTestProject
+public sealed class OracleNewContactSession : Session, INewContactSession
 {
-    public class MyDatabaseIntegrationTests
+    public OracleNewContactSession(OracleConnection connection) : base(connection) { }
+
+    public void UpdateContact(Contact contact)
     {
-        [SkippableFact]
-        public async Task RunAllMigrations()
-        {
-            Skip.IfNot(TestSettings.Configuration.GetValue<bool>("database:areTestsEnabled"));
-            
-            var connectionString = TestSettings.Configuration["database:connectionString"] ??
-                throw new InvalidOperationException("You must set connectionString when areTestsEnabled is set to true");           
-            await Database.DropAndCreateDatabaseAsync(connectionString);
-            
-            await using var connection = await Database.OpenConnectionAsync(connectionString);
-            
-            // Execute all your migrations and check if they were applied successfully
-        }
+        // The following line will create an OracleCommand and automatically
+        // attaches the current transaction to it.
+        using var command = CreateCommand();
+
+        // We recommend to use Light.EmbeddedResources to retrieve embedded SQL scripts.
+        // See the previous section about read-only sessions for more details.
+        command.CommandText = SqlScripts.GetScript("UpdateContact.sql");
+        command.Parameters.Add("pId", OracleDbType.Int32, ParameterDirection.Input).Value = contact.Id;
+        command.Parameters.Add("pName", OracleDbType.NVarchar2, ParameterDirection.Input).Value = contact.Name;
+        command.Parameters.Add("pEmail", OracleDbType.NVarchar2, ParameterDirection.Input).Value = contact.Email;
+
+        command.ExecuteNonQuery();
     }
+
+    // Other members are omitted, please check the read-only session section for the implementation
 }
 ```
 
-A detailed description on how to set this up can be found [here](https://github.com/Synnotech-AG/Synnotech.Xunit#testsettingsjson).
+The DML statement of UpdateContact.sql might look like this:
 
-## Easily Execute a SQL Command
+```sql
+UPDATE Contacts
+SET Name = :pName, Email = :pEmail
+WHERE Id = :pId;
+```
 
-You can use the two overloads of `Database.ExecuteNonQueryAsync` to quickly apply SQL statements to the target database. This is most useful in integration tests where you want to apply a single SQL script to bring the database in a certain state before the actual test exercises the database.
+To access your session in other classes, register it with the DI container:
 
 ```csharp
-public class MyTestClass
+services.AddSession<IUpdateContactSession, OracleNewContactSession>();
+```
+
+You can then use it e.g. in an ASP.NET Core MVC controller:
+
+```csharp
+[ApiController]
+[Route("/api/contacts/update")]
+public sealed class UpdateContactController : ControllerBase
 {
-    [SkippableFact]
-    public async Task MyIntegrationTest()
+    public UpdateContactController(Func<IUpdateContactSession> createSession,
+                                   IValidator<UpdateContactDto> validator,
+                                   ILogger logger)
     {
-        var connectionString = TestSettings.GetConnectionStringOrSkip();
-        await Database.DropAndCreateDatabaseAsync(connectionString);
-        await Database.ExecuteNonQueryAsync(connectionString, this.GetEmbeddedResource("SimpleDatabase.sql"))
+        CreateSession = createSession;
+        Validator = validator;
+        Logger = logger;
+    }
 
-        // actual test code comes here
+    private Func<IUpdateContactSession> CreateSession { get; }
+    private IValidator<UpdateContactDto> Validator { get; }
+    private ILogger Logger { get; }
+
+    [HttpPut]
+    public IActionResult UpdateContact(UpdateContactDto dto)
+    {
+        if (this.CheckForErrors(dto, validator, out var badResult))
+            return badResult;
+        
+        using var session = CreateSession();
+        var contact = session.GetContact(dto.Id);
+        if (contact == null)
+            return NotFound();
+        
+        contact.Name = dto.Name;
+        contact.Email = dto.Email;
+        session.UpdateContact(contact);
+        session.SaveChanges();
+        Logger.Information("Contact {@Contact} was updated successfully", contact);
+        return NoContent();
     }
 }
 ```
-
-In the example above, we use [Synnotech.Xunit](https://github.com/Synnotech-AG/Synnotech.Xunit) and [Xunit.SkippableFact](https://github.com/AArnott/Xunit.SkippableFact) to skip the test or get the target connection string from testsettings.json. We then (re-)create the target database and execute the script `SimpleDatabase.sql` against it. The script is an embedded resource and retrieved using [Light.EmbeddedResources](https://github.com/feO2x/Light.EmbeddedResources).
-
-As you can see, you can simply pass in a connection string. If you already have an open connection, then you can also call an extension method with the same name on it:
-
-```csharp
-await using var connection = Database.OpenConnectionAsync(connectionString);
-await connection.ExecuteNonQueryAsync(
-    this.GetEmbeddedResource("MySqlScript.sql"),
-    command => command.Parameters.AddWithValue("@CompanyId", companyId)
-);
-```
-
-The example above also illustrates how you can adjust the command via the optional `configureCommand` delegate. You will most likely use it to set parameters on the SQL command.
-
-Besides that, you can also execute the command within a dedicated transaction using the optional `transactionLevel` parameter:
-
-```csharp
-await connection.ExecuteNonQueryAsync(
-    this.GetEmbeddedResource("MySqlScript.sql"),
-    transactionLevel: IsolationLevel.Serializable
-);
-```
-
-If you created your own transaction, you must add it to the command manually using `configureCommand`:
-
-```csharp
-await using var connection = await Database.OpenConnectionAsync(connectionString);
-await using var myTransaction = connection.BeginTransaction();
-await connection.ExecuteNonQueryAsync(
-    this.GetEmbeddedResource("MyScript"),
-    command => command.Transaction = myTransaction
-);
-```
-
-Finally, both of the overloads support `CancellationToken`.
-
-## Database Name Escaping
-
-For most things, the `SqlCommand` provides parameters that will be properly escaped when executing queries or DML statements. However, DDL statements usually do not support parameters. You can manually escape database identifiers by using the `SqlEscaping.CheckAndNormalizeDatabaseName` function. Alternatively, you can use the `DatabaseName` struct to encapsulate an escaped database identifier. The identifiers are escaped according to the [official rules of SQL Server](https://docs.microsoft.com/en-us/sql/relational-databases/databases/database-identifiers?view=sql-server-ver15#rules-for-regular-identifiers).
-
-## Migration Guide
-
-### From 1.1.0 to 2.0.0
-
-Version 2.0.0 uses [System.Data.SqlClient](https://www.nuget.org/packages/System.Data.SqlClient/) instead of [Microsoft.Data.SqlClient](https://www.nuget.org/packages/Microsoft.Data.SqlClient/). This allows you to use spatial types and `SqlHierarchyId` in .NET Core and .NET 5/6 projects via [dotmortem.Microsoft.SqlServer.Types](https://github.com/dotMorten/Microsoft.SqlServer.Types). You simply need to recompile to make this work.
