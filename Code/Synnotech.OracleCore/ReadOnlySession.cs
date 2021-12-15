@@ -24,7 +24,7 @@ public abstract class ReadOnlySession : IDisposable
     protected ReadOnlySession(OracleConnection connection,
                               IsolationLevel transactionLevel = IsolationLevel.Unspecified)
     {
-        Connection = connection.MustNotBeNull(nameof(connection));
+        Connection = connection.MustNotBeNull();
         connection.Open();
 
         if (transactionLevel != IsolationLevel.Unspecified)
@@ -37,7 +37,7 @@ public abstract class ReadOnlySession : IDisposable
     protected OracleConnection Connection { get; }
 
     /// <summary>
-    /// Gets the transaction that was started on this transaction.
+    /// Gets the transaction that was started on this session.
     /// </summary>
     protected OracleTransaction? Transaction { get; }
 
