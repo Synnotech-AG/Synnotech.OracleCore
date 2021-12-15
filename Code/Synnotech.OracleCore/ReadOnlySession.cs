@@ -42,6 +42,15 @@ public abstract class ReadOnlySession : IDisposable
     protected OracleTransaction? Transaction { get; }
 
     /// <summary>
+    /// Disposes the internal transaction (if there is one) and the oracle connection.
+    /// </summary>
+    public void Dispose()
+    {
+        Transaction?.Dispose();
+        Connection.Dispose();
+    }
+
+    /// <summary>
     /// Creates a new oracle command from the connection and automatically
     /// attaches it to the transaction if there is one. You must dispose
     /// the command by yourself.
@@ -51,15 +60,7 @@ public abstract class ReadOnlySession : IDisposable
         var command = Connection.CreateCommand();
         if (Transaction != null)
             command.Transaction = Transaction;
-        return command;
-    }
 
-    /// <summary>
-    /// Disposes the internal transaction (if there is one) and the oracle connection.
-    /// </summary>
-    public void Dispose()
-    {
-        Transaction?.Dispose();
-        Connection.Dispose();
+        return command;
     }
 }
