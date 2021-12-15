@@ -35,6 +35,7 @@ Synntech.OracleCore 1.0.0
         <PackageReference Include="Light.GuardClauses" Version="10.0.0" />
         <PackageReference Include="Synnotech.DatabaseAbstractions" Version="3.0.0" />
         <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="6.0.0" />
+        <PackageReference Include="Synnotech.Core" Version="0.1.0" />
         <PackageReference Include="Microsoft.SourceLink.GitHub" Version="1.1.1" PrivateAssets="all" />
     </ItemGroup>
 
